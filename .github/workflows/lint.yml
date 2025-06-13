@@ -17,4 +17,4 @@ jobs:
         run: pip install -r .dev_requirements.txt
 
       - name: Lint playbook
-        run: ansible-lint
+        run: yamllint -c .yamllint . && ansible-lint

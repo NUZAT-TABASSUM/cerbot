@@ -1,74 +1,137 @@
 ---
-
 - name: Check Let's Encrypt email address is set
   ansible.builtin.assert:
-    that: opencast_certbot_letsencrypt_email | default(None) != None
-    fail_msg: 'Please set opencast_certbot_letsencrypt_email!'
+    that:
+      - elan_certbot_letsencrypt_email | default(None) != None
+    fail_msg: 'Please set elan_certbot_letsencrypt_email!'
 
-- name: Activate epel repository on RedHat systems
-  ansible.builtin.package:
-    name: epel-release
-  when: >-
-    ansible_os_family == 'RedHat' and
-    opencast_certbot_enable_epel | bool
+# ------------------------------------------------------------
+# Install Certbot
+# ------------------------------------------------------------
+- name: Install certbot on RedHat systems
+  when: ansible_os_family == 'RedHat'
+  block:
+    - name: Activate EPEL repository if enabled
+      ansible.builtin.dnf:
+        name: epel-release
+      when: opencast_certbot_enable_epel | bool
 
-- name: Install certbot package
-  ansible.builtin.package:
-    name: certbot
+    - name: Install certbot using dnf
+      ansible.builtin.dnf:
+        name: certbot
+        state: present
 
-# This task should remove custom service definitions created by previous version of this role.
-# Certbot package come with a renew service definitions itself, why not using it?
-# It will renew all registred certificates by default and does not limit us on some domains.
-# You can remove this task on later versions.
-- name: Remove custom certbot services definition
-  ansible.builtin.file:
-    path: '/etc/systemd/system/{{ item }}'
-    state: absent
-  loop:
-    - certbot-renew.service
-    - certbot-renew.timer
-  notify: Enable certbot
+- name: Install certbot on Debian systems
+  when: ansible_os_family == 'Debian'
+  block:
+    - name: Install certbot
+      ansible.builtin.apt:
+        name: certbot
+        state: present
+        update_cache: true
 
-- name: Start certbot service
-  ansible.builtin.service:
-    name: "{{ 'certbot-renew.timer' if ansible_os_family == 'RedHat' else 'certbot.timer' }}"
+# ------------------------------------------------------------
+# Enable Certbot timer
+# ------------------------------------------------------------
+- name: Enable certbot's built-in timer
+  ansible.builtin.systemd:
+    name: certbot.timer
     state: started
     enabled: true
 
-- name: Generate initial certificate
-  ansible.builtin.command:
-    cmd: >-
-      certbot -n
-      -a webroot
-      --webroot-path /var/lib/nginx/
-      --agree-tos
-      -m {{ opencast_certbot_letsencrypt_email }}
-      certonly
-      --domains {{ inventory_hostname }}
-      {%if opencast_certbot_deploy_hook | default(None) != None %}--deploy-hook "{{ opencast_certbot_deploy_hook }}"{% endif %}
-    creates: /etc/letsencrypt/live/{{ inventory_hostname }}/fullchain.pem
-
-- name: Look for Nginx configuration directory
-  ansible.builtin.stat:
-    path: /etc/nginx/ssl
-  register: nginx_conf_dir
-
-- name: Install certificete in Nginx
-  when: nginx_conf_dir.stat.exists and nginx_conf_dir.stat.isdir
+# ------------------------------------------------------------
+# Use Let’s Encrypt
+# ------------------------------------------------------------
+- name: Use letsencrypt
+  when: elan_certbot_ca == 'letsencrypt'
   block:
-    - name: Symlink certificates
-      ansible.builtin.file:
-        src: /etc/letsencrypt/live/{{ item.src }}
-        dest: /etc/nginx/ssl/{{ item.dest }}
-        state: link
-        force: true
-      loop:
-        - src: '{{ inventory_hostname }}/fullchain.pem'
-          dest: '{{ inventory_hostname }}.crt'
-        - src: '{{ inventory_hostname }}/privkey.pem'
-          dest: '{{ inventory_hostname }}.key'
+    - name: Generate initial certificate
+      ansible.builtin.shell:
+        cmd: >
+          certbot certonly
+          --non-interactive
+          --authenticator webroot
+          --webroot-path /var/lib/nginx/
+          --agree-tos
+          --email {{ elan_certbot_letsencrypt_email }}
+          --domains {{ elan_certbot_domains | join(",") }}
+          --cert-name elan-certbot-certificate
+          {% if opencast_certbot_deploy_hook | default(None) != None %}--deploy-hook "{{ opencast_certbot_deploy_hook }}"{% endif %}
+        creates: /etc/letsencrypt/live/elan-certbot-certificate/fullchain.pem
+      no_log: true
 
-    - name: Reload nginx
-      ansible.builtin.systemd:
-        name: nginx
-        state: reloaded
+    - name: Expand existing certificate  # noqa: no-changed-when
+      when: elan_certbot_expand_existing
+      notify: Reload nginx
+      ansible.builtin.shell:
+        cmd: >
+          certbot certonly
+          --non-interactive
+          --authenticator webroot
+          --webroot-path /var/lib/nginx/
+          --agree-tos
+          --email {{ elan_certbot_letsencrypt_email }}
+          --domains {{ elan_certbot_domains | join(",") }}
+          --expand
+          --cert-name elan-certbot-certificate
+          {% if opencast_certbot_deploy_hook | default(None) != None %}--deploy-hook "{{ opencast_certbot_deploy_hook }}"{% endif %}
+      no_log: true
+
+# ------------------------------------------------------------
+# Use Sectigo
+# ------------------------------------------------------------
+- name: Use sectigo
+  when: elan_certbot_ca == 'sectigo'
+  block:
+    - name: Generate initial certificate
+      ansible.builtin.shell:
+        cmd: >
+          certbot certonly
+          --standalone
+          --non-interactive
+          --agree-tos
+          --email {{ elan_certbot_letsencrypt_email }}
+          --server https://acme.sectigo.com/v2/OV
+          --eab-kid {{ elan_certbot_eab_kid }}
+          --eab-hmac-key {{ elan_certbot_eab_hmac }}
+          --domains {{ elan_certbot_domains | join(",") }}
+          --cert-name elan-certbot-certificate
+          {% if opencast_certbot_deploy_hook | default(None) != None %}--deploy-hook "{{ opencast_certbot_deploy_hook }}"{% endif %}
+        creates: /etc/letsencrypt/live/elan-certbot-certificate/fullchain.pem
+      no_log: true
+
+    - name: Expand existing certificate  # noqa: no-changed-when
+      when: elan_certbot_expand_existing
+      notify: Reload nginx
+      ansible.builtin.shell:
+        cmd: >
+          certbot certonly
+          --standalone
+          --non-interactive
+          --agree-tos
+          --email {{ elan_certbot_letsencrypt_email }}
+          --server https://acme.sectigo.com/v2/OV
+          --eab-kid {{ elan_certbot_eab_kid }}
+          --eab-hmac-key {{ elan_certbot_eab_hmac }}
+          --domains {{ elan_certbot_domains | join(",") }}
+          --expand
+          --cert-name elan-certbot-certificate
+          {% if opencast_certbot_deploy_hook | default(None) != None %}--deploy-hook "{{ opencast_certbot_deploy_hook }}"{% endif %}
+      no_log: true
+
+# ------------------------------------------------------------
+# Symlink certificate/key
+# ------------------------------------------------------------
+- name: Set TLS base dir per distro
+  ansible.builtin.set_fact:
+    tls_base_dir: "{{ '/etc/pki/tls' if ansible_os_family == 'RedHat' else '/etc/ssl' }}"
+
+- name: Symlink certificates
+  ansible.builtin.file:
+    src: "/etc/letsencrypt/live/elan-certbot-certificate/{{ item.src }}"
+    dest: "{{ tls_base_dir }}/{{ item.dest }}"
+    state: link
+    force: true
+  loop:
+    - {src: "fullchain.pem", dest: "certificate.crt"}
+    - {src: "privkey.pem", dest: "certificate.key"}

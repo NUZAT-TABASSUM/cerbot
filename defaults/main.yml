@@ -1,2 +1,12 @@
 ---
 opencast_certbot_enable_epel: true
+elan_certbot_domains: ["{{ inventory_hostname }}"]
+elan_certbot_expand_existing: false
+
+# Specify the certificate authority to use
+# Either "letsencrypt" or "sectigo" (for dfn acme, e.g.)
+elan_certbot_ca: letsencrypt
+
+# For eab with sectigo define these variables:
+# elan_certbot_eab_kid:
+# elan_certbot_eab_hmac:

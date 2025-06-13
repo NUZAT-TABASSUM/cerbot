@@ -1,4 +1,4 @@
-Ansible: Opencast Certbot Role
+Ansible: Certbot Role for OpenCast
 ==============================
 
 [![lint](https://github.com/elan-ev/opencast_certbot/actions/workflows/lint.yml/badge.svg)](https://github.com/elan-ev/opencast_certbot/actions/workflows/lint.yml)
@@ -8,7 +8,7 @@ This Ansible role configures TLS certificate renewal via certbot for Opencast.
 Role Variables
 --------------
 
-- `opencast_certbot_letsencrypt_email`
+- `elan_certbot_letsencrypt_email`
   - Email address for Let's Encrypt account (_required_)
   - This is used by Let's Encrypt to send certificate expiration warnings if necessary.
 - `opencast_certbot_deploy_hook`
@@ -19,6 +19,9 @@ Role Variables
     or disable (value: `false`) installation of the `epel-release` package (default: `true`).
     On RedHat installation with Satellite this property can be handy.
   - On Debian based systems this property do nothing.
+- `elan_certbot_domains`: A list specifying the domains for which the certificate should be valid. Defaults to ["{{ inventory_hostname }}"].
+- `elan_certbot_expand_existing`: A boolean flag that you can use e.g. as extra variable when running a playbook, to force certbot to expand already existing certificates. You should not set this to true as default, but only when you actually need it.
+- `elan_certbot_ca`: You can specify if you want to use letsencrypt (the default) or use sectigo with eab for DFN ACME. You then also need to define `elan_certbot_eab_kid` and `elan_certbot_eab_hmac`.
 
 Dependencies
 ------------
@@ -37,8 +40,7 @@ Example of how to configure and use the role:
 - hosts: servers
   become: true
   roles:
-    - elan.opencast_nginx
-    - role: elan.opencast_certbot
-      opencast_certbot_letsencrypt_email: admin@example.com
+    - role: elan.certbot
+      elan_certbot_letsencrypt_email: admin@example.com
       opencast_certbot_deploy_hook: /usr/bin/systemctl reload nginx
 ```
